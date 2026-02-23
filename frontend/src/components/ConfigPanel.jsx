@@ -22,7 +22,7 @@ export default function ConfigPanel({ isOpen, onClose }) {
     }, []);
 
     const fetchConfig = async () => {
-        const { data, error } = await supabase.table('config').select('*').limit(1);
+        const { data, error } = await supabase.from('config').select('*').limit(1);
         if (data && data.length > 0) {
             setConfigId(data[0].id);
             setConfig({
@@ -52,16 +52,16 @@ export default function ConfigPanel({ isOpen, onClose }) {
         setMessage('');
 
         try {
-            const { data: existingData, error: fetchError } = await supabase.table('config').select('id').limit(1);
+            const { data: existingData, error: fetchError } = await supabase.from('config').select('id').limit(1);
 
             if (fetchError) throw fetchError;
 
             if (existingData && existingData.length > 0) {
-                const { error: updateError } = await supabase.table('config').update({ ...config, updated_at: new Date() }).eq('id', existingData[0].id);
+                const { error: updateError } = await supabase.from('config').update({ ...config, updated_at: new Date() }).eq('id', existingData[0].id);
                 if (updateError) throw updateError;
                 setConfigId(existingData[0].id);
             } else {
-                const { data: insertData, error: insertError } = await supabase.table('config').insert({ ...config }).select();
+                const { data: insertData, error: insertError } = await supabase.from('config').insert({ ...config }).select();
                 if (insertError) throw insertError;
                 if (insertData && insertData.length > 0) setConfigId(insertData[0].id);
             }

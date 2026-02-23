@@ -14,7 +14,7 @@ function App() {
     const fetchDeals = async () => {
         setLoading(true);
         const { data, error } = await supabase
-            .table('deals')
+            .from('deals')
             .select('*')
             .order('created_at', { ascending: false })
             .limit(100);
