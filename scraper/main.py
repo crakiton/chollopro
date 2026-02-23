@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai
 from supabase import create_client, Client
 from telegram import Bot
 
@@ -32,14 +32,13 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-# We will use the recommended 'gemini-1.5-flash' for fast scoring
-# The user asked for 'Gemini 1.5 Flash-Lite API', but 'gemini-1.5-flash' is the standard model name in SDK.
-try:
-    model = genai.GenerativeModel('gemini-1.5-flash')
-except Exception as e:
-    logger.error(f"Error initializing Gemini: {e}")
-    model = None
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        logger.error(f"Error initializing Gemini: {e}")
+        client = None
+else:
+    client = None
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
@@ -63,18 +62,18 @@ def get_config():
     return {
         "keyword": os.getenv("SEARCH_KEYWORD", "iphone 13"),
         "category": os.getenv("SEARCH_CATEGORY", "technology"),
-        "min_price": float(os.getenv("MIN_PRICE", 0)),
-        "max_price": float(os.getenv("MAX_PRICE", 300)),
+        "min_price": float(os.getenv("MIN_PRICE") or 0),
+        "max_price": float(os.getenv("MAX_PRICE") or 300),
         "location_mode": os.getenv("LOCATION_MODE", "shipping"),
         "city": os.getenv("CITY", "Madrid"),
-        "radius_km": int(os.getenv("RADIUS_KM", 50)),
-        "min_score": int(os.getenv("MIN_SCORE", 7))
+        "radius_km": int(os.getenv("RADIUS_KM") or 50),
+        "min_score": int(os.getenv("MIN_SCORE") or 7)
     }
 
 
 def score_deal(title, price, description):
     """Use Gemini to score the deal from 1 to 10."""
-    if not model:
+    if not client:
         return 0, "Gemini no configurado"
     
     prompt = f"""You are a resell expert. Analyze this Wallapop listing and score its 
@@ -85,7 +84,10 @@ Description: {description}.
 Return only a JSON: {{"score": X, "reason": "brief reason in Spanish"}}"""
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model='gemini-1.5-flash-8b', # Map Flash-Lite to standard API model name
+            contents=prompt,
+        )
         text = response.text.strip()
         # Clean up in case markdown json block is returned
         if text.startswith("```json"):
