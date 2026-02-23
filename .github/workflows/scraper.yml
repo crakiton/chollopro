@@ -1,0 +1,40 @@
+name: CholloPro Scraper
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r scraper/requirements.txt
+
+      - name: Run scraper
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          # Fallback config (if not using Supabase config table)
+          SEARCH_KEYWORD: ${{ secrets.SEARCH_KEYWORD }}
+          SEARCH_CATEGORY: ${{ secrets.SEARCH_CATEGORY }}
+          MAX_PRICE: ${{ secrets.MAX_PRICE }}
+          MIN_PRICE: ${{ secrets.MIN_PRICE }}
+          LOCATION_MODE: ${{ secrets.LOCATION_MODE }}
+          CITY: ${{ secrets.CITY }}
+          RADIUS_KM: ${{ secrets.RADIUS_KM }}
+          MIN_SCORE: ${{ secrets.MIN_SCORE }}
+        run: python scraper/main.py
