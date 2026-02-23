@@ -52,15 +52,23 @@ export default function ConfigPanel({ isOpen, onClose }) {
         setMessage('');
 
         try {
-            if (configId) {
-                await supabase.table('config').update({ ...config, updated_at: new Date() }).eq('id', configId);
+            const { data: existingData, error: fetchError } = await supabase.table('config').select('id').limit(1);
+
+            if (fetchError) throw fetchError;
+
+            if (existingData && existingData.length > 0) {
+                const { error: updateError } = await supabase.table('config').update({ ...config, updated_at: new Date() }).eq('id', existingData[0].id);
+                if (updateError) throw updateError;
+                setConfigId(existingData[0].id);
             } else {
-                const { data } = await supabase.table('config').insert({ ...config }).select();
-                if (data && data.length > 0) setConfigId(data[0].id);
+                const { data: insertData, error: insertError } = await supabase.table('config').insert({ ...config }).select();
+                if (insertError) throw insertError;
+                if (insertData && insertData.length > 0) setConfigId(insertData[0].id);
             }
-            setMessage('✅ Configuración guardada. Aplicará en el prox scraper.');
+            setMessage('✅ Configuración guardada');
             setTimeout(() => setMessage(''), 3000);
         } catch (error) {
+            console.error("Save config error:", error);
             setMessage('❌ Error al guardar config');
         } finally {
             setSaving(false);
