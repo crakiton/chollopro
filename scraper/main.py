@@ -8,13 +8,7 @@ from google import genai
 from supabase import create_client, Client
 from telegram import Bot
 
-# Try to import Wallapy wrapper
-# The exact import might vary depending on the library version, handling standard case
-try:
-    from wallapy import Wallapy
-except ImportError:
-    # Fallback if the module structure is different
-    pass
+from wallapy import Wallapy
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -23,12 +17,19 @@ logger = logging.getLogger("chollo-scraper")
 load_dotenv()
 
 # --- Config Initialization ---
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("Missing Supabase credentials")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+if not SUPABASE_URL.startswith("https://"):
+    raise ValueError(f"Invalid SUPABASE_URL: '{SUPABASE_URL}'. It must start with 'https://'.")
+
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    logger.error(f"Failed to initialize Supabase client: {e}")
+    raise
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
@@ -128,17 +129,13 @@ async def send_telegram_alert(deal):
 async def main():
     config = get_config()
     keyword = config.get("keyword")
+    if not keyword:
+        keyword = "iphone"
+        logger.warning("Search keyword was empty. Defaulting to 'iphone'.")
     
     logger.info(f"Starting Wallapop scrape for '{keyword}'")
 
-    # Initialize Wallapy
-    # Note: Wallapy API usage (guessing standard parameters based on PyPI description)
-    # The actual parameters might need adjustment depending on the exact wallapy version
-    try:
-        wp = Wallapy()
-    except NameError:
-        logger.error("Wallapy library not properly imported.")
-        return
+    wp = Wallapy()
 
     # Prepare search parameters
     search_params = {
