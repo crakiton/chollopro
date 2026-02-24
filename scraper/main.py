@@ -2,13 +2,12 @@ import os
 import json
 import asyncio
 import logging
-from datetime import datetime
+import time
 from dotenv import load_dotenv
 from google import genai
 from supabase import create_client, Client
 from telegram import Bot
-
-from wallapy import WallaPyClient as Wallapy
+import requests
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -16,11 +15,11 @@ logger = logging.getLogger("chollo-scraper")
 
 load_dotenv()
 
-# --- Config Initialization ---
+# --- Supabase Initialization ---
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Missing Supabase credentials")
+    raise ValueError("Missing Supabase credentials: SUPABASE_URL and SUPABASE_KEY must be set.")
 
 if not SUPABASE_URL.startswith("https://"):
     raise ValueError(f"Invalid SUPABASE_URL: '{SUPABASE_URL}'. It must start with 'https://'.")
@@ -31,16 +30,18 @@ except Exception as e:
     logger.error(f"Failed to initialize Supabase client: {e}")
     raise
 
+# --- Gemini Initialization ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     except Exception as e:
         logger.error(f"Error initializing Gemini: {e}")
-        client = None
+        gemini_client = None
 else:
-    client = None
+    gemini_client = None
 
+# --- Telegram Initialization ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 if TELEGRAM_BOT_TOKEN:
@@ -48,9 +49,19 @@ if TELEGRAM_BOT_TOKEN:
 else:
     bot = None
 
+# Wallapop API constants
+WALLAPOP_SEARCH_URL = "https://api.wallapop.com/api/v3/general/search"
+WALLAPOP_ITEM_URL = "https://api.wallapop.com/api/v3/items/{item_id}"
+WALLAPOP_HEADERS = {
+    "X-DeviceOS": "0",
+    "DeviceOS": "0",
+    "Accept": "application/json",
+    "Accept-Language": "es-ES",
+}
+
 
 def get_config():
-    """Fetch configuration from Supabase, fallback to Env Variables."""
+    """Fetch configuration from Supabase config table, fallback to Env Variables."""
     try:
         response = supabase.table("config").select("*").limit(1).execute()
         if response.data and len(response.data) > 0:
@@ -72,30 +83,82 @@ def get_config():
     }
 
 
-def score_deal(title, price, description):
-    """Use Gemini to score the deal from 1 to 10."""
-    if not client:
-        return 0, "Gemini no configurado"
-    
-    prompt = f"""You are a resell expert. Analyze this Wallapop listing and score its 
-resell potential from 1-10. 
-Title: {title}. 
-Price: {price}€. 
-Description: {description}. 
-Return only a JSON: {{"score": X, "reason": "brief reason in Spanish"}}"""
+def search_wallapop(config):
+    """Call Wallapop search API and return a list of raw item dicts."""
+    keyword = config.get("keyword") or "iphone"
+    min_price = config.get("min_price", 0)
+    max_price = config.get("max_price", 300)
+    location_mode = config.get("location_mode", "shipping")
+    radius_km = int(config.get("radius_km") or 50)
+
+    params = {
+        "keywords": keyword,
+        "latitude": 40.4168,
+        "longitude": -3.7038,
+        "distance": radius_km * 1000,
+        "min_sale_price": min_price,
+        "max_sale_price": max_price,
+        "order_by": "price_low_to_high",
+    }
+
+    if location_mode == "shipping":
+        params["shipping_allowed"] = True
+
+    logger.info(f"Searching Wallapop for '{keyword}' | mode={location_mode} | price={min_price}-{max_price}€")
 
     try:
-        response = client.models.generate_content(
-            model='gemini-1.5-flash-8b', # Map Flash-Lite to standard API model name
+        response = requests.get(WALLAPOP_SEARCH_URL, params=params, headers=WALLAPOP_HEADERS, timeout=15)
+    except requests.RequestException as e:
+        logger.error(f"Search request failed: {e}")
+        return []
+
+    if response.status_code != 200:
+        logger.error(f"Search API returned status {response.status_code}: {response.text[:300]}")
+        return []
+
+    data = response.json()
+    items = data.get("search_objects", [])
+    logger.info(f"Found {len(items)} results from Wallapop.")
+    return items
+
+
+def get_item_description(item_id):
+    """Fetch the description of a single item from Wallapop's item detail API."""
+    url = WALLAPOP_ITEM_URL.format(item_id=item_id)
+    try:
+        response = requests.get(url, headers=WALLAPOP_HEADERS, timeout=10)
+        if response.status_code == 200:
+            return response.json().get("description", "Sin descripción")
+        else:
+            logger.warning(f"Item detail API returned {response.status_code} for item {item_id}")
+    except requests.RequestException as e:
+        logger.warning(f"Failed to fetch description for item {item_id}: {e}")
+    return "Sin descripción"
+
+
+def score_deal(title, price, description):
+    """Use Gemini to score the deal from 1 to 10."""
+    if not gemini_client:
+        return 0, "Gemini no configurado"
+
+    prompt = f"""You are a resell expert in Spain. Analyze this Wallapop listing and score its resell potential from 1-10.
+Title: {title}
+Price: {price}€
+Description: {description}
+Return only valid JSON: {{"score": X, "reason": "brief reason in Spanish"}}"""
+
+    try:
+        response = gemini_client.models.generate_content(
+            model='gemini-1.5-flash-8b',
             contents=prompt,
         )
         text = response.text.strip()
-        # Clean up in case markdown json block is returned
+        # Clean up markdown code block if present
         if text.startswith("```json"):
-            text = text[7:-3]
+            text = text[7:].rstrip("```").strip()
         elif text.startswith("```"):
-            text = text[3:-3]
-            
+            text = text[3:].rstrip("```").strip()
+
         data = json.loads(text)
         return int(data.get("score", 0)), data.get("reason", "Sin razón provista")
     except Exception as e:
@@ -107,10 +170,9 @@ async def send_telegram_alert(deal):
     """Send alert to Telegram channel."""
     if not bot or not TELEGRAM_CHANNEL_ID:
         return
-    
+
     score = deal['score']
-    has_shipping = deal['has_shipping']
-    shipping_str = "🚚 Con envío" if has_shipping else ""
+    shipping_str = "🚚 Con envío" if deal['has_shipping'] else ""
 
     message = f"""🔥 CHOLLO {score}/10
 📦 {deal['title']}
@@ -128,94 +190,89 @@ async def send_telegram_alert(deal):
 
 async def main():
     config = get_config()
+
+    # Keyword safety fallback
     keyword = config.get("keyword")
     if not keyword:
         keyword = "iphone"
         logger.warning("Search keyword was empty. Defaulting to 'iphone'.")
-    
-    logger.info(f"Starting Wallapop scrape for '{keyword}'")
+        config["keyword"] = keyword
 
-    wp = Wallapy()
+    # --- Step 1: Search Wallapop ---
+    items = search_wallapop(config)
+    if not items:
+        logger.info("No items to process. Exiting.")
+        return
 
-    # Prepare search parameters
-    search_params = {
-        "keywords": keyword,
-        "min_price": config.get("min_price"),
-        "max_price": config.get("max_price"),
-    }
-    
-    if config.get("location_mode") == "shipping":
-        search_params["shipping"] = True
-    # If category or location filtering is explicitly supported by wallapy, they'd be added here.
-    
-    try:
-        # Assuming wp.search() returns a list of items or an object with items
-        results = await wp.search(**search_params) if asyncio.iscoroutinefunction(wp.search) else wp.search(**search_params)
-        
-        # Depending on wallapy's return type, adapt to a list of dicts:
-        # Some versions return objects, just keeping it generic
-        items = results if isinstance(results, list) else getattr(results, 'items', [])
-        
-        if not items:
-            logger.info("No items found.")
-            return
+    min_score = int(config.get("min_score") or 7)
 
-        for item in items:
-            # Extract fields safely assuming dict or object
-            # Adjust these depending on wallapy's exact item structure
-            item_url = item.get('url') if isinstance(item, dict) else getattr(item, 'url', '')
-            if not item_url:
-                continue
-                
-            item_id = item.get('id') if isinstance(item, dict) else getattr(item, 'id', '')
-            title = item.get('title') if isinstance(item, dict) else getattr(item, 'title', 'Sin título')
-            price = item.get('price') if isinstance(item, dict) else getattr(item, 'price', 0)
-            description = item.get('description') if isinstance(item, dict) else getattr(item, 'description', '')
-            
-            # Avoid duplicate check
-            resp = supabase.table("deals").select("id").eq("url", item_url).limit(1).execute()
+    for item in items:
+        item_id = item.get("id", "")
+        title = item.get("title", "Sin título")
+        price = item.get("price", 0)
+        web_slug = item.get("web_slug", "")
+        url = f"https://es.wallapop.com/item/{web_slug}" if web_slug else ""
+
+        if not url:
+            logger.warning(f"Item '{title}' has no URL, skipping.")
+            continue
+
+        # Extract photo URL
+        images = item.get("images", [])
+        photo_url = ""
+        if images:
+            photo_url = images[0].get("urls", {}).get("big", "")
+
+        location = item.get("location", {}).get("city", "N/A")
+        has_shipping = item.get("shipping_allowed", False)
+
+        # --- Duplicate check ---
+        try:
+            resp = supabase.table("deals").select("id").eq("url", url).limit(1).execute()
             if resp.data and len(resp.data) > 0:
-                continue # Already processed
-            
-            logger.info(f"New listing found: {title} - {price}€")
-            
-            # Score deal
-            score, reason = score_deal(title, price, description)
-            logger.info(f"Gemini Score: {score}/10 - {reason}")
-            
-            min_score = config.get("min_score", 7)
-            if score >= min_score:
-                photo_url = ''
-                images = item.get('images', []) if isinstance(item, dict) else getattr(item, 'images', [])
-                if images and len(images) > 0:
-                    photo_url = images[0].get('original') if isinstance(images[0], dict) else getattr(images[0], 'original', '')
-                
-                location_obj = item.get('location', {}) if isinstance(item, dict) else getattr(item, 'location', {})
-                location = location_obj.get('city', '') if isinstance(location_obj, dict) else getattr(location_obj, 'city', 'Desconocida')
-                
-                shipping_info = item.get('shipping', {}) if isinstance(item, dict) else getattr(item, 'shipping', {})
-                has_shipping = shipping_info.get('userAllowsShipping', False) if isinstance(shipping_info, dict) else getattr(shipping_info, 'userAllowsShipping', False)
-                
-                deal_data = {
-                    "title": title,
-                    "price": price,
-                    "url": item_url,
-                    "photo_url": photo_url,
-                    "score": score,
-                    "reason": reason,
-                    "location": location,
-                    "has_shipping": has_shipping
-                }
-                
-                # Save to supabase
-                supabase.table("deals").insert(deal_data).execute()
-                logger.info(f"Deal saved to Supabase: {title}")
-                
-                # Send alert
-                await send_telegram_alert(deal_data)
-                
-    except Exception as e:
-        logger.error(f"Error during scraping process: {e}")
+                logger.debug(f"Skipping duplicate: {title}")
+                continue
+        except Exception as e:
+            logger.error(f"Error checking duplicate for '{title}': {e}")
+            continue
+
+        logger.info(f"New listing: {title} — {price}€")
+
+        # --- Step 2: Fetch item description ---
+        time.sleep(0.5)  # Rate limit protection
+        description = get_item_description(item_id)
+
+        # --- Step 3: Score with Gemini ---
+        score, reason = score_deal(title, price, description)
+        logger.info(f"Score {score}/10 — {reason}")
+
+        if score < min_score:
+            logger.info(f"Score {score} below threshold {min_score}. Skipping.")
+            continue
+
+        deal_data = {
+            "title": title,
+            "price": price,
+            "url": url,
+            "photo_url": photo_url,
+            "score": score,
+            "reason": reason,
+            "location": location,
+            "has_shipping": has_shipping,
+            "description": description,
+        }
+
+        # --- Step 4: Save to Supabase ---
+        try:
+            supabase.table("deals").insert(deal_data).execute()
+            logger.info(f"Deal saved: {title}")
+        except Exception as e:
+            logger.error(f"Failed to save deal '{title}': {e}")
+            continue
+
+        # --- Step 4: Send Telegram alert ---
+        await send_telegram_alert(deal_data)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

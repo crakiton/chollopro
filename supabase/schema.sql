@@ -74,3 +74,6 @@ CREATE POLICY "Allow public insert access to config"
     ON public.config
     FOR INSERT
     WITH CHECK (true);
+
+-- Add description column to deals table if it doesn't exist yet
+ALTER TABLE public.deals ADD COLUMN IF NOT EXISTS description TEXT;
