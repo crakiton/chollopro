@@ -37,4 +37,5 @@ jobs:
           CITY: ${{ secrets.CITY }}
           RADIUS_KM: ${{ secrets.RADIUS_KM }}
           MIN_SCORE: ${{ secrets.MIN_SCORE }}
+          PROXY_URL: ${{ secrets.PROXY_URL }}
         run: python scraper/main.py

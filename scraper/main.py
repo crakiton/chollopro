@@ -49,6 +49,14 @@ if TELEGRAM_BOT_TOKEN:
 else:
     bot = None
 
+# --- Proxy configuration (for bypassing Cloudflare on GitHub Actions) ---
+proxy_url = os.getenv("PROXY_URL")
+proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
+if proxies:
+    logger.info("Proxy configured for outbound requests.")
+else:
+    logger.info("No proxy configured. Running direct.")
+
 # Wallapop API constants
 WALLAPOP_SEARCH_URL = "https://api.wallapop.com/api/v3/general/search"
 WALLAPOP_ITEM_URL = "https://api.wallapop.com/api/v3/items/{item_id}"
@@ -107,7 +115,7 @@ def search_wallapop(config):
     logger.info(f"Searching Wallapop for '{keyword}' | mode={location_mode} | price={min_price}-{max_price}€")
 
     try:
-        response = requests.get(WALLAPOP_SEARCH_URL, params=params, headers=WALLAPOP_HEADERS, timeout=15)
+        response = requests.get(WALLAPOP_SEARCH_URL, params=params, headers=WALLAPOP_HEADERS, proxies=proxies, timeout=15)
     except requests.RequestException as e:
         logger.error(f"Search request failed: {e}")
         return []
@@ -126,7 +134,7 @@ def get_item_description(item_id):
     """Fetch the description of a single item from Wallapop's item detail API."""
     url = WALLAPOP_ITEM_URL.format(item_id=item_id)
     try:
-        response = requests.get(url, headers=WALLAPOP_HEADERS, timeout=10)
+        response = requests.get(url, headers=WALLAPOP_HEADERS, proxies=proxies, timeout=10)
         if response.status_code == 200:
             return response.json().get("description", "Sin descripción")
         else:
