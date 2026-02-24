@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from google import genai
 from supabase import create_client, Client
 from telegram import Bot
-import requests
+from curl_cffi import requests
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -115,7 +115,14 @@ def search_wallapop(config):
     logger.info(f"Searching Wallapop for '{keyword}' | mode={location_mode} | price={min_price}-{max_price}€")
 
     try:
-        response = requests.get(WALLAPOP_SEARCH_URL, params=params, headers=WALLAPOP_HEADERS, proxies=proxies, timeout=15)
+        response = requests.get(
+            WALLAPOP_SEARCH_URL,
+            params=params,
+            headers=WALLAPOP_HEADERS,
+            proxies=proxies,
+            impersonate="chrome120",
+            timeout=15,
+        )
     except requests.RequestException as e:
         logger.error(f"Search request failed: {e}")
         return []
@@ -134,7 +141,13 @@ def get_item_description(item_id):
     """Fetch the description of a single item from Wallapop's item detail API."""
     url = WALLAPOP_ITEM_URL.format(item_id=item_id)
     try:
-        response = requests.get(url, headers=WALLAPOP_HEADERS, proxies=proxies, timeout=10)
+        response = requests.get(
+            url,
+            headers=WALLAPOP_HEADERS,
+            proxies=proxies,
+            impersonate="chrome120",
+            timeout=10,
+        )
         if response.status_code == 200:
             return response.json().get("description", "Sin descripción")
         else:

@@ -1,4 +1,4 @@
-requests
+curl_cffi
 google-genai
 supabase
 python-telegram-bot
