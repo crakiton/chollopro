@@ -8,7 +8,7 @@ from google import genai
 from supabase import create_client, Client
 from telegram import Bot
 
-from wallapy import Wallapy
+from wallapy import WallaPyClient as Wallapy
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
